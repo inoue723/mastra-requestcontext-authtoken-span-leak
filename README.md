@@ -18,13 +18,12 @@ JWT is handed to whatever exporter is configured (storage, Braintrust, OTLP, ...
 
 ```bash
 npm install
-npm start            # end-to-end: real built-in auth + auto-generated spans
-npm run start:minimal  # isolated: the same leak at the observability layer
+npm start
 ```
 
-Both scripts exit `1` when the leak is present.
+The script exits `1` when the leak is present.
 
-## `npm start` — end-to-end (recommended)
+## What the reproduction does
 
 `src/reproduce-server.ts` is a realistic use case. It uses only the public API
 and **never touches `RequestContext` or spans directly**:
@@ -63,13 +62,6 @@ Spans whose requestContext carries the raw bearer token: 2
 === Result ===
 Raw bearer token reached the exporter in plaintext: true
 ```
-
-## `npm run start:minimal` — isolated
-
-`src/reproduce.ts` strips the HTTP/auth/agent layers and reproduces the same leak
-directly at the observability layer: it populates a `RequestContext` exactly as
-the auth middleware does and starts/ends one span, then inspects the exported
-`requestContext`. Useful for pinpointing the defect without any server setup.
 
 ## Root cause
 

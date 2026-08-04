@@ -6,7 +6,6 @@
   "description": "Minimal reproduction: Mastra built-in auth's raw bearer token (mastra__authToken) and user object leak onto every span's requestContext, bypassing the default SensitiveDataFilter.",
   "scripts": {
     "start": "tsx src/reproduce-server.ts",
-    "start:minimal": "tsx src/reproduce.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
