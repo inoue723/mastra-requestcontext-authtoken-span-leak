@@ -11,51 +11,65 @@ JWT is handed to whatever exporter is configured (storage, Braintrust, OTLP, ...
 
 - `@mastra/core` **1.55.0**
 - `@mastra/observability` **1.16.3**
-- `@mastra/server` **1.55.0** (source of the reserved-key writes)
+- `@mastra/deployer` **1.55.0** (serves the built-in routes; bundles `@mastra/server`,
+  the source of the reserved-key writes)
 
 ## Run
 
 ```bash
 npm install
-npm start
+npm start            # end-to-end: real built-in auth + auto-generated spans
+npm run start:minimal  # isolated: the same leak at the observability layer
 ```
 
-## Expected output (bug present)
+Both scripts exit `1` when the leak is present.
+
+## `npm start` — end-to-end (recommended)
+
+`src/reproduce-server.ts` is a realistic use case. It uses only the public API
+and **never touches `RequestContext` or spans directly**:
+
+1. A `Mastra` instance with a built-in auth provider (`server.auth`), one agent
+   (backed by a tiny mock model so there's no API key / network), and
+   observability using a capturing `TestExporter` + the **auto-applied default
+   `SensitiveDataFilter`**.
+2. Serves the real Hono app via `createHonoServer(mastra)`.
+3. Makes one **authenticated** request to the built-in endpoint:
+   ```
+   POST /api/agents/demoAgent/generate
+   Authorization: Bearer <token>
+   ```
+4. Mastra's auth middleware validates the token and — on its own — stores it in
+   the request's `RequestContext` under `mastra__authToken` (plus the user under
+   `mastra__user` / `user`). The agent run then **auto-generates** the spans.
+5. The script reads the exported spans back and shows the raw token survived.
+
+### Expected output (bug present)
 
 ```
-=== Exported span.requestContext (exactly what an exporter persists) ===
+POST /api/agents/demoAgent/generate -> HTTP 200
+Auto-generated spans: 5 (types: agent_run, model_generation, model_step, model_inference, model_chunk)
+Spans whose requestContext carries the raw bearer token: 2
+
+=== "agent_run" span.requestContext (exactly what an exporter persists) ===
 {
+  "mastra__authMode": "server",
+  "mastra__user": { "id": "user-123", "email": "admin@example.com" },
+  "user": { "id": "user-123", "email": "admin@example.com" },
   "mastra__authToken": "eyJhbGciOiJIUzI1NiJ9.FAKE_SESSION_JWT_DO_NOT_USE.fake_signature",
-  "mastra__user": { "email": "admin@example.com", "sub": "user-123" },
-  "user": { "email": "admin@example.com", "sub": "user-123" }
+  "mastra__versions": { "defaultStatus": "published" }
 }
 
 === Result ===
-mastra__authToken present in plaintext: true
-user object present:                    true
+Raw bearer token reached the exporter in plaintext: true
 ```
 
-The process exits `1` when the leak is present.
+## `npm run start:minimal` — isolated
 
-> The default `SensitiveDataFilter` is **auto-applied** here: `src/reproduce.ts`
-> passes a plain config object (not a pre-instantiated instance), which is the
-> secure-by-default path. The token still leaks.
-
-## What the reproduction does
-
-`src/reproduce.ts` uses only the public API:
-
-1. Builds an `Observability` with a capturing `TestExporter` (stands in for any
-   real exporter) and the auto-applied default `SensitiveDataFilter`.
-2. Populates a `RequestContext` **exactly** as `@mastra/server`'s built-in auth
-   middleware does per request:
-   ```ts
-   requestContext.set(MASTRA_AUTH_TOKEN_KEY, rawBearerToken); // "mastra__authToken"
-   requestContext.set("mastra__user", user);
-   requestContext.set("user", user);
-   ```
-3. Starts and ends a normal `AGENT_RUN` span carrying that `RequestContext`.
-4. Reads back the exported span and shows the raw token/user survived to export.
+`src/reproduce.ts` strips the HTTP/auth/agent layers and reproduces the same leak
+directly at the observability layer: it populates a `RequestContext` exactly as
+the auth middleware does and starts/ends one span, then inspects the exported
+`requestContext`. Useful for pinpointing the defect without any server setup.
 
 ## Root cause
 
